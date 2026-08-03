@@ -1,0 +1,9 @@
+# Normalise line endings so a clone works on every platform.
+* text=auto eol=lf
+
+# Shell scripts MUST stay LF — bash fails on CRLF with "\r: command not found".
+*.sh text eol=lf
+*.py text eol=lf
+
+# PowerShell is happiest with CRLF on Windows.
+*.ps1 text eol=crlf

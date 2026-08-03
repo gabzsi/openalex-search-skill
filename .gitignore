@@ -1,0 +1,28 @@
+# Secrets — never commit an API key
+.env
+*.key
+.openalex_key
+.openalex_key.txt
+openalex_key.txt
+openalex_api_key.txt
+
+# Search output: results are reproducible, and downloaded PDFs are the
+# publishers' copyrighted files even when open access.
+results/
+pdfs/
+*.pdf
+*.jsonl
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
