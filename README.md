@@ -75,32 +75,104 @@ git clone https://github.com/gabzsi/openalex-search-skill.git ~/.claude/skills/o
 
 ## Add your API key
 
-Optional but recommended — it raises your daily budget 10×.
+**Optional** — everything works without one. A free key just raises your daily
+budget from $0.10 to $1.00 (roughly 100 searches/day → 1,000).
 
-Save the key as a one-line text file at **`~/openalex_key.txt`** (on Windows:
-`C:\Users\<you>\openalex_key.txt`). Just the key, nothing else — no
-`OPENALEX_API_KEY=`, no quotes.
+### 1. Get the key
 
-Any of these locations work, so it's hard to get wrong:
+Go to **[openalex.org/settings/api](https://openalex.org/settings/api)**, sign
+in (~30 seconds, no payment details), and copy the key.
+
+### 2. Save it to a file
+
+The file holds **the key and nothing else** — no `OPENALEX_API_KEY=`, no
+quotes, no comments. A trailing newline is fine.
+
+**Windows.** The simplest reliable route is Notepad. In Command Prompt:
+
+```bat
+notepad "%USERPROFILE%\openalex_key.txt"
+```
+
+Notepad says the file doesn't exist and offers to create it — say yes. Paste
+the key, Ctrl+S, close.
+
+> **Watch for `openalex_key.txt.txt`.** Windows hides known extensions by
+> default, so Notepad's Save As can silently double them. Turn on
+> **View → File name extensions** in Explorer to see the real name.
+
+Or, as a one-liner (note: *no space* before `>`, or the space lands in the
+file):
+
+```bat
+echo YOUR_KEY_HERE>"%USERPROFILE%\openalex_key.txt"
+```
+
+**macOS / Linux:**
+
+```bash
+printf '%s' 'YOUR_KEY_HERE' > ~/.openalex_key
+chmod 600 ~/.openalex_key
+```
+
+### Where the key can live
+
+Checked in this order; the first hit wins:
 
 | Location | Notes |
 | --- | --- |
-| `OPENALEX_API_KEY` env var | Takes precedence over the files |
-| `~/openalex_key.txt` | Simplest on Windows |
+| `OPENALEX_API_KEY` env var | Wins over every file. On Windows, `setx OPENALEX_API_KEY "…"` needs an app restart to take effect |
+| `OPENALEX_KEY` env var | Alternative name, same behaviour |
 | `~/.openalex_key` | Conventional on macOS/Linux |
-| `<skill dir>/.env` | Copy `.env.example` and edit |
+| `~/.openalex_key.txt` | For when Windows appends `.txt` |
+| `~/openalex_key.txt` | Simplest on Windows |
+| `~/openalex_api_key.txt` | Also accepted |
+| `<skill dir>/.env` | Copy `.env.example` and fill it in |
 
-Verify:
+Placeholder values (`paste_your_key_here`, `<your key>`, …) are ignored, so an
+unedited `.env.example` copy won't break anything.
+
+### 3. Verify
 
 ```bash
 python ~/.claude/skills/openalex-search/scripts/openalex.py budget
 ```
 
-You want `"api_key": "set"` and `"daily_limit_usd": 1.0`.
+PowerShell needs a different path form — see the note below.
 
-> **Note for PowerShell users:** `~` is not expanded in arguments to a native
-> executable. Use `$HOME\.claude\skills\openalex-search\scripts\openalex.py`
-> instead. In `cmd.exe`, use `%USERPROFILE%\...`.
+```json
+{
+  "api_key": "set",
+  "daily_limit_usd": 1.0,
+  "remaining_usd": 0.9998,
+  "prepaid_remaining_usd": 0.0
+}
+```
+
+`"api_key": "set"` and `"daily_limit_usd": 1.0` means you're done.
+
+> **Path forms differ by shell.** PowerShell does *not* expand `~` in arguments
+> to a native executable — it passes the tilde through literally and Python
+> can't find the file.
+>
+> | Shell | Use |
+> | --- | --- |
+> | bash / zsh | `python ~/.claude/skills/openalex-search/scripts/openalex.py budget` |
+> | PowerShell | `python $HOME\.claude\skills\openalex-search\scripts\openalex.py budget` |
+> | cmd.exe | `python "%USERPROFILE%\.claude\skills\openalex-search\scripts\openalex.py" budget` |
+
+### Still shows `"daily_limit_usd": 0.1`?
+
+| Cause | Fix |
+| --- | --- |
+| File is really `openalex_key.txt.txt` | Enable **View → File name extensions** and rename |
+| File saved somewhere other than your home folder | Confirm with `echo %USERPROFILE%` (Windows) or `echo $HOME` |
+| File has notes or several lines in it | Keep it to the key alone. An `OPENALEX_API_KEY=…` line *is* understood, but stray extra lines are not |
+| Value looks like a placeholder | Values containing whitespace, `<`/`>`, or markers like `paste`/`changeme`/`your_key` are ignored on purpose. Real alphanumeric keys are never caught by this |
+| Set via `setx` | Fully quit and reopen your terminal *and* Claude Code |
+
+You are never charged for getting this wrong — without a key the tool just
+runs on the smaller free budget.
 
 ## Usage
 

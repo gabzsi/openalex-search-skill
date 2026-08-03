@@ -281,11 +281,18 @@ def _retry_after(headers: Any, body: str) -> float | None:
         return None
 
 
-PLACEHOLDER_HINTS = ("paste", "your", "here", "xxxx", "<", "changeme")
+# Distinctive multi-word markers only. Bare "your"/"here" would false-positive
+# on a random alphanumeric key that happens to contain those letters.
+PLACEHOLDER_HINTS = ("paste", "changeme", "xxxx", "your_key", "yourkey",
+                     "your-key", "key_here", "keyhere", "key-here", "example")
 
 
 def _is_placeholder(value: str) -> bool:
     low = value.lower()
+    # Real keys are alphanumeric with the odd dash/underscore; anything with
+    # whitespace or angle brackets is instruction text, not a key.
+    if any(ch.isspace() or ch in "<>" for ch in value):
+        return True
     return any(hint in low for hint in PLACEHOLDER_HINTS)
 
 
