@@ -629,6 +629,842 @@ def write_report(rows: list[dict], path: Path, *, title: str,
     path.write_text("\n".join(out), encoding="utf-8")
 
 
+def clean_num_str(val: Any) -> str:
+    """Format volume, issue, year without floating point .0 artifacts."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s in ("nan", "NaN", "None", "<NA>"):
+        return ""
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+
+def format_author_for_citation(name: str) -> str | None:
+    """Format an author name into standard citation format (Last, First M.).
+
+    Protects corporate/institutional authors by adding a trailing comma, which
+    prevents EndNote and reference managers from reversing words.
+    """
+    if not name:
+        return None
+    name = name.strip()
+    if not name or name.lower() in ("nan", "none", "unknown"):
+        return None
+
+    name = (name.replace("\u2010", "-")
+                .replace("\u2013", "-")
+                .replace("\u2014", "-")
+                .replace("\xa0", " "))
+
+    inst_keywords = (
+        "univ", "lab", "inc", "dept", "center", "centre", "institute",
+        "institution", "national", "office", "ind. (usa)", "radiation",
+        "ministry", "association", "organization", "organisation", "committee"
+    )
+    if any(k in name.lower() for k in inst_keywords):
+        return name.rstrip(",") + ","
+
+    if "," in name:
+        return name
+
+    suffix = ""
+    m_suf = re.search(r"\b(Jr|Sr|II|III|IV)\b\.?", name, re.IGNORECASE)
+    if m_suf:
+        raw_suf = m_suf.group(0).strip()
+        if raw_suf.lower() in ("jr", "sr"):
+            raw_suf += "."
+        suffix = " " + raw_suf
+        name = (name[:m_suf.start()].strip() + " " + name[m_suf.end():].strip()).strip()
+        name = re.sub(r"\s+", " ", name)
+
+    parts = name.split()
+    if len(parts) == 1:
+        return parts[0] + suffix
+
+    surname = parts[-1] + suffix
+    given = " ".join(parts[:-1])
+    return f"{surname}, {given}"
+
+
+def map_work_type_ris(oa_type: str) -> str:
+    t = (oa_type or "").lower().strip()
+    if "journal" in t or "article" in t:
+        return "JOUR"
+    if "book-chapter" in t or "chapter" in t or "section" in t:
+        return "CHAP"
+    if "book" in t or "monograph" in t:
+        return "BOOK"
+    if "dissertation" in t or "thesis" in t:
+        return "THES"
+    if "report" in t or "memorandum" in t:
+        return "RPRT"
+    if "dataset" in t:
+        return "DATA"
+    if "preprint" in t:
+        return "ELEC"
+    return "GEN"
+
+
+def map_work_type_enw(oa_type: str) -> str:
+    t = (oa_type or "").lower().strip()
+    if "journal" in t or "article" in t:
+        return "Journal Article"
+    if "book-chapter" in t or "chapter" in t or "section" in t:
+        return "Book Section"
+    if "book" in t or "monograph" in t:
+        return "Book"
+    if "dissertation" in t or "thesis" in t:
+        return "Thesis"
+    if "report" in t or "memorandum" in t:
+        return "Report"
+    if "dataset" in t:
+        return "Dataset"
+    if "preprint" in t:
+        return "Electronic Article"
+    return "Generic"
+
+
+def write_ris(rows: list[dict], path: Path) -> None:
+    """Write RIS citation file (UTF-8 with BOM for reference managers)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records: list[str] = []
+    for r in rows:
+        lines: list[str] = []
+        rec_type = map_work_type_ris(r.get("type", ""))
+        lines.append(f"TY  - {rec_type}")
+
+        title = str(r.get("title") or "").strip()
+        if title:
+            lines.append(f"TI  - {title}")
+            lines.append(f"T1  - {title}")
+
+        authors_raw = str(r.get("all_authors") or "").strip()
+        if authors_raw:
+            for a in authors_raw.split(";"):
+                fa = format_author_for_citation(a)
+                if fa:
+                    lines.append(f"AU  - {fa}")
+
+        journal = str(r.get("journal") or "").strip()
+        if journal:
+            lines.append(f"JO  - {journal}")
+            lines.append(f"JF  - {journal}")
+        elif rec_type == "RPRT" and r.get("publisher"):
+            lines.append(f"PB  - {r['publisher']}")
+
+        year = clean_num_str(r.get("year"))
+        if year:
+            lines.append(f"PY  - {year}")
+            lines.append(f"Y1  - {year}")
+
+        vol = clean_num_str(r.get("volume"))
+        if vol:
+            lines.append(f"VL  - {vol}")
+
+        issue = clean_num_str(r.get("issue"))
+        if issue:
+            lines.append(f"IS  - {issue}")
+
+        pages = str(r.get("pages") or "").strip()
+        if pages:
+            if "-" in pages:
+                sp, ep = pages.split("-", 1)
+                lines.append(f"SP  - {sp.strip()}")
+                lines.append(f"EP  - {ep.strip()}")
+            else:
+                lines.append(f"SP  - {pages}")
+
+        doi = str(r.get("doi") or "").strip()
+        if doi:
+            lines.append(f"DO  - {doi}")
+
+        doi_url = str(r.get("doi_url") or "").strip()
+        if not doi_url and doi:
+            doi_url = f"https://doi.org/{doi}"
+        if not doi_url:
+            doi_url = str(r.get("landing_page_url") or "").strip()
+        if doi_url:
+            lines.append(f"UR  - {doi_url}")
+
+        abstract = str(r.get("abstract") or "").strip()
+        if abstract and not abstract.startswith("_No abstract"):
+            abstract_clean = " ".join(abstract.split())
+            lines.append(f"AB  - {abstract_clean}")
+
+        for kw_field in ("topic", "subfield", "field"):
+            val = str(r.get(kw_field) or "").strip()
+            if val:
+                lines.append(f"KW  - {val}")
+        keywords = str(r.get("keywords") or "").strip()
+        if keywords:
+            for kw in keywords.split(";"):
+                kw_clean = kw.strip()
+                if kw_clean:
+                    lines.append(f"KW  - {kw_clean}")
+
+        if r.get("publisher") and rec_type != "RPRT":
+            lines.append(f"PB  - {r['publisher']}")
+
+        lines.append("ER  - ")
+        records.append("\n".join(lines))
+
+    content = "\n\n".join(records) + "\n"
+    with path.open("w", encoding="utf-8-sig") as fh:
+        fh.write(content)
+
+
+def write_enw(rows: list[dict], path: Path) -> None:
+    """Write EndNote tagged format (.enw) file (UTF-8 BOM for 1-click import)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records: list[str] = []
+    for r in rows:
+        lines: list[str] = []
+        rec_type = map_work_type_enw(r.get("type", ""))
+        lines.append(f"%0 {rec_type}")
+
+        title = str(r.get("title") or "").strip()
+        if title:
+            lines.append(f"%T {title}")
+
+        authors_raw = str(r.get("all_authors") or "").strip()
+        if authors_raw:
+            for a in authors_raw.split(";"):
+                fa = format_author_for_citation(a)
+                if fa:
+                    lines.append(f"%A {fa}")
+
+        journal = str(r.get("journal") or "").strip()
+        if journal:
+            lines.append(f"%J {journal}")
+        elif rec_type == "Report" and r.get("publisher"):
+            lines.append(f"%I {r['publisher']}")
+
+        year = clean_num_str(r.get("year"))
+        if year:
+            lines.append(f"%D {year}")
+
+        vol = clean_num_str(r.get("volume"))
+        if vol:
+            lines.append(f"%V {vol}")
+
+        issue = clean_num_str(r.get("issue"))
+        if issue:
+            lines.append(f"%N {issue}")
+
+        pages = str(r.get("pages") or "").strip()
+        if pages:
+            if "-" in pages:
+                sp, ep = pages.split("-", 1)
+                if sp.strip() == ep.strip():
+                    pages = sp.strip()
+            lines.append(f"%P {pages}")
+
+        doi = str(r.get("doi") or "").strip()
+        if doi:
+            lines.append(f"%R {doi}")
+
+        doi_url = str(r.get("doi_url") or "").strip()
+        if not doi_url and doi:
+            doi_url = f"https://doi.org/{doi}"
+        if not doi_url:
+            doi_url = str(r.get("landing_page_url") or "").strip()
+        if doi_url:
+            lines.append(f"%U {doi_url}")
+
+        abstract = str(r.get("abstract") or "").strip()
+        if abstract and not abstract.startswith("_No abstract"):
+            abstract_clean = " ".join(abstract.split())
+            lines.append(f"%X {abstract_clean}")
+
+        for kw_field in ("topic", "subfield", "field"):
+            val = str(r.get(kw_field) or "").strip()
+            if val:
+                lines.append(f"%K {val}")
+        keywords = str(r.get("keywords") or "").strip()
+        if keywords:
+            for kw in keywords.split(";"):
+                kw_clean = kw.strip()
+                if kw_clean:
+                    lines.append(f"%K {kw_clean}")
+
+        if r.get("publisher") and rec_type != "Report":
+            lines.append(f"%I {r['publisher']}")
+
+        records.append("\n".join(lines))
+
+    content = "\n\n".join(records) + "\n"
+    with path.open("w", encoding="utf-8-sig") as fh:
+        fh.write(content)
+
+
+def write_html_report(rows: list[dict], path: Path, *, title: str,
+                      provenance: dict[str, Any], abstract_chars: int = 700) -> None:
+    """Standalone, interactive HTML screening report with search, filter, and sort."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    years = []
+    for r in rows:
+        y = r.get("year")
+        if isinstance(y, int):
+            years.append(y)
+        elif str(y).isdigit():
+            years.append(int(y))
+
+    year_range_str = f"{min(years)}–{max(years)}" if years else "N/A"
+    n_oa = sum(1 for r in rows if r.get("is_oa"))
+    pct_oa = round((n_oa / len(rows)) * 100) if rows else 0
+    n_pdf = sum(1 for r in rows if r.get("pdf_file"))
+    n_retracted = sum(1 for r in rows if r.get("is_retracted"))
+
+    cites_list = []
+    for r in rows:
+        try:
+            cites_list.append(int(r.get("cited_by_count") or 0))
+        except (ValueError, TypeError):
+            cites_list.append(0)
+    total_cites = sum(cites_list)
+    avg_cites = round(total_cites / len(rows), 1) if rows else 0
+    max_cites = max(cites_list) if cites_list else 0
+
+    all_types = sorted({str(r.get("type") or "other").lower().strip() for r in rows if r.get("type")})
+
+    prov_items = []
+    for k, v in provenance.items():
+        if v not in (None, "", []):
+            prov_items.append(f"<div><span class='prov-label'>{html.escape(str(k))}:</span> <span class='prov-val'>{html.escape(str(v))}</span></div>")
+    prov_html = "\n".join(prov_items) if prov_items else "<div>No query parameters recorded.</div>"
+
+    type_options = "\n".join(f'<option value="{html.escape(t)}">{html.escape(t.replace("-", " ").title())}</option>' for t in all_types)
+
+    table_rows = []
+    for r in rows:
+        rank = r.get("rank", 0)
+        raw_title = str(r.get("title") or "Untitled").strip()
+        t_esc = html.escape(raw_title)
+
+        authors_raw = str(r.get("all_authors") or "").strip()
+        auth_list = [a.strip() for a in authors_raw.split(";") if a.strip()]
+        if len(auth_list) > 8:
+            auth_shown = ", ".join(auth_list[:8]) + f", ... (+{len(auth_list) - 8} more)"
+        else:
+            auth_shown = ", ".join(auth_list) if auth_list else "Unknown authors"
+        auth_esc = html.escape(auth_shown)
+
+        journal = str(r.get("journal") or "").strip()
+        if not journal or journal.lower() in ("nan", "none"):
+            journal = str(r.get("type") or "Scholarly Work").title()
+        j_esc = html.escape(journal)
+
+        year_val = clean_num_str(r.get("year"))
+        vol_val = clean_num_str(r.get("volume"))
+        iss_val = clean_num_str(r.get("issue"))
+        pages_val = str(r.get("pages") or "").strip()
+
+        pub_bits = []
+        if year_val:
+            pub_bits.append(year_val)
+        if vol_val:
+            vol_str = f"Vol. {vol_val}"
+            if iss_val:
+                vol_str += f"({iss_val})"
+            pub_bits.append(vol_str)
+        if pages_val:
+            pub_bits.append(f"pp. {pages_val}")
+        pub_info = html.escape(" • ".join(pub_bits))
+
+        cites = int(r.get("cited_by_count") or 0)
+        fwci_raw = r.get("fwci")
+        fwci_val = ""
+        if fwci_raw not in (None, "", "nan"):
+            try:
+                fwci_val = f"{float(fwci_raw):.2f}"
+            except (ValueError, TypeError):
+                fwci_val = ""
+
+        is_oa = bool(r.get("is_oa"))
+        oa_status = str(r.get("oa_status") or ("oa" if is_oa else "closed")).lower().strip()
+        oa_badge_class = f"badge-oa-{oa_status}" if is_oa else "badge-closed"
+        oa_badge_text = f"OA {oa_status.capitalize()}" if is_oa else "Closed Access"
+
+        doi = str(r.get("doi") or "").strip()
+        doi_url = str(r.get("doi_url") or "").strip()
+        if not doi_url and doi:
+            doi_url = f"https://doi.org/{doi}"
+        if not doi_url:
+            doi_url = str(r.get("landing_page_url") or "").strip()
+
+        pdf_url = str(r.get("pdf_file") or r.get("pdf_url") or "").strip()
+        openalex_url = f"https://openalex.org/{r.get('id', '')}" if r.get("id") else ""
+
+        abstract_text = str(r.get("abstract") or "").strip()
+        has_abstract = bool(abstract_text and not abstract_text.startswith("_No abstract"))
+        abs_esc = html.escape(abstract_text)
+
+        w_type = str(r.get("type") or "other").lower().strip()
+
+        actions = []
+        if doi_url:
+            actions.append(f'<a href="{html.escape(doi_url)}" target="_blank" class="btn btn-doi" title="Open DOI">DOI &rarr;</a>')
+        if pdf_url:
+            actions.append(f'<a href="{html.escape(pdf_url)}" target="_blank" class="btn btn-pdf" title="Open PDF">PDF &darr;</a>')
+        if openalex_url:
+            actions.append(f'<a href="{html.escape(openalex_url)}" target="_blank" class="btn btn-oa" title="View OpenAlex Record">OpenAlex</a>')
+        actions_html = " ".join(actions)
+
+        abstract_html = ""
+        if has_abstract:
+            abstract_html = f"""
+            <div class="abstract-wrapper">
+                <button class="btn-abstract" onclick="toggleRowAbstract(this)">Show Abstract</button>
+                <div class="abstract-content">{abs_esc}</div>
+            </div>
+            """
+
+        fwci_html = f'<div class="metric-sub">FWCI: <strong>{fwci_val}</strong></div>' if fwci_val else ""
+        retracted_badge = '<span class="badge-retracted">:warning: RETRACTED</span>' if r.get("is_retracted") else ""
+
+        row_html = f"""
+        <tr data-rank="{rank}"
+            data-title="{t_esc}"
+            data-authors="{auth_esc}"
+            data-journal="{j_esc}"
+            data-year="{year_val}"
+            data-cites="{cites}"
+            data-fwci="{fwci_val}"
+            data-oa="{'oa' if is_oa else 'closed'}"
+            data-type="{html.escape(w_type)}">
+            <td class="col-rank">{rank}</td>
+            <td class="col-details">
+                <div class="title-line">
+                    <a href="{html.escape(doi_url or openalex_url)}" target="_blank" class="paper-title">{t_esc}</a>
+                    {retracted_badge}
+                </div>
+                <div class="paper-authors">{auth_esc}</div>
+                {abstract_html}
+            </td>
+            <td class="col-venue">
+                <div class="venue-name">{j_esc}</div>
+                <div class="pub-details">{pub_info}</div>
+            </td>
+            <td class="col-metrics">
+                <div class="cites-pill"><strong>{cites}</strong> cites</div>
+                {fwci_html}
+                <div class="type-pill">{html.escape(w_type.replace('-', ' ').title())}</div>
+            </td>
+            <td class="col-access">
+                <span class="badge {oa_badge_class}">{oa_badge_text}</span>
+                <div class="actions-group">
+                    {actions_html}
+                </div>
+            </td>
+        </tr>
+        """
+        table_rows.append(row_html)
+
+    body_rows_html = "\n".join(table_rows)
+
+    retracted_stat_html = f'<div class="stat-card stat-alert"><div class="stat-num">{n_retracted}</div><div class="stat-lbl">Retracted Works</div></div>' if n_retracted else ""
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{html.escape(title)}</title>
+    <style>
+        :root {{
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #0f172a;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --radius: 8px;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            padding-bottom: 60px;
+        }}
+        .hero {{
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #1e3a8a 100%);
+            color: #ffffff;
+            padding: 40px 32px 36px;
+            border-bottom: 1px solid #334155;
+        }}
+        .hero-container {{ max-width: 1400px; margin: 0 auto; }}
+        .hero-tag {{
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 3px 10px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #93c5fd;
+            margin-bottom: 12px;
+        }}
+        .hero h1 {{ font-size: 1.85rem; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.02em; }}
+        .hero-sub {{ font-size: 0.95rem; color: #94a3b8; margin-bottom: 20px; }}
+        .hero-sub a {{ color: #60a5fa; text-decoration: none; }}
+        .hero-sub a:hover {{ text-decoration: underline; }}
+        .prov-box {{
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: var(--radius);
+            padding: 12px 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px 24px;
+            font-size: 0.85rem;
+        }}
+        .prov-label {{ color: #94a3b8; font-weight: 500; }}
+        .prov-val {{ color: #f1f5f9; font-weight: 600; }}
+        .stats-grid {{
+            max-width: 1400px;
+            margin: -20px auto 28px;
+            padding: 0 32px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            position: relative;
+            z-index: 10;
+        }}
+        .stat-card {{
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            box-shadow: var(--shadow-sm);
+        }}
+        .stat-num {{ font-size: 1.5rem; font-weight: 700; color: var(--primary); font-family: monospace; }}
+        .stat-lbl {{ font-size: 0.75rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 2px; }}
+        .stat-alert .stat-num {{ color: #dc2626; }}
+        .container {{ max-width: 1400px; margin: 0 auto; padding: 0 32px; }}
+        .toolbar {{
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow-sm);
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+        }}
+        .search-box {{ flex: 1; min-width: 260px; }}
+        .search-box input {{
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }}
+        .search-box input:focus {{ border-color: var(--primary); }}
+        .toolbar select {{
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+            background: #fff;
+            color: var(--text);
+            cursor: pointer;
+            outline: none;
+        }}
+        .btn-toggle-all {{
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+            background: #f1f5f9;
+            color: #334155;
+            cursor: pointer;
+            font-weight: 500;
+        }}
+        .btn-toggle-all:hover {{ background: #e2e8f0; }}
+        .count-badge {{ font-size: 0.85rem; font-weight: 600; color: var(--text-muted); margin-left: auto; }}
+        .table-wrap {{
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-sm);
+            overflow-x: auto;
+        }}
+        table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem; }}
+        th {{
+            background: #f8fafc;
+            padding: 12px 16px;
+            font-weight: 600;
+            color: #475569;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }}
+        td {{ padding: 14px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }}
+        tr:last-child td {{ border-bottom: none; }}
+        tr:hover {{ background: #fbfcfe; }}
+        .col-rank {{ width: 44px; color: var(--text-muted); font-weight: 600; text-align: center; }}
+        .col-details {{ min-width: 440px; }}
+        .col-venue {{ min-width: 220px; }}
+        .col-metrics {{ width: 140px; white-space: nowrap; }}
+        .col-access {{ width: 170px; }}
+        .paper-title {{ font-size: 0.98rem; font-weight: 600; color: #1e3a8a; text-decoration: none; line-height: 1.4; }}
+        .paper-title:hover {{ color: var(--primary); text-decoration: underline; }}
+        .paper-authors {{ font-size: 0.82rem; color: #475569; margin-top: 4px; }}
+        .venue-name {{ font-weight: 600; color: #334155; }}
+        .pub-details {{ font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }}
+        .cites-pill {{
+            display: inline-block;
+            background: #eff6ff;
+            color: #1e40af;
+            border: 1px solid #bfdbfe;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+        }}
+        .metric-sub {{ font-size: 0.76rem; color: var(--text-muted); margin-top: 3px; }}
+        .type-pill {{
+            display: inline-block;
+            background: #f1f5f9;
+            color: #475569;
+            border: 1px solid #cbd5e1;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            margin-top: 4px;
+        }}
+        .badge {{
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            margin-bottom: 6px;
+        }}
+        .badge-oa-gold {{ background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }}
+        .badge-oa-green {{ background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }}
+        .badge-oa-hybrid {{ background: #e0f2fe; color: #075985; border: 1px solid #bae6fd; }}
+        .badge-oa-bronze {{ background: #ffedd5; color: #9a3412; border: 1px solid #fed7aa; }}
+        .badge-oa-oa {{ background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }}
+        .badge-closed {{ background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }}
+        .badge-retracted {{ background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; font-weight: 700; margin-left: 6px; }}
+        .actions-group {{ display: flex; flex-wrap: wrap; gap: 4px; }}
+        .btn {{
+            display: inline-block;
+            padding: 3px 7px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: background 0.15s;
+        }}
+        .btn-doi {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }}
+        .btn-doi:hover {{ background: #dbeafe; }}
+        .btn-pdf {{ background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }}
+        .btn-pdf:hover {{ background: #d1fae5; }}
+        .btn-oa {{ background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1; }}
+        .btn-oa:hover {{ background: #e2e8f0; color: #334155; }}
+        .abstract-wrapper {{ margin-top: 6px; }}
+        .btn-abstract {{
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--primary);
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            cursor: pointer;
+            font-weight: 500;
+        }}
+        .btn-abstract:hover, .btn-abstract.active {{ background: #eff6ff; border-color: #bfdbfe; }}
+        .abstract-content {{
+            display: none;
+            margin-top: 6px;
+            padding: 8px 12px;
+            background: #f8fafc;
+            border-left: 3px solid var(--primary);
+            border-radius: 0 4px 4px 0;
+            font-size: 0.83rem;
+            color: #334155;
+            line-height: 1.55;
+        }}
+    </style>
+</head>
+<body>
+    <header class="hero">
+        <div class="hero-container">
+            <span class="hero-tag">Literature Screening Report</span>
+            <h1>{html.escape(title)}</h1>
+            <div class="hero-sub">
+                Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} from <a href="https://openalex.org" target="_blank">OpenAlex</a>
+            </div>
+            <div class="prov-box">
+                {prov_html}
+            </div>
+        </div>
+    </header>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-num">{len(rows)}</div>
+            <div class="stat-lbl">Total Records</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-num">{pct_oa}%</div>
+            <div class="stat-lbl">Open Access ({n_oa}/{len(rows)})</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-num">{total_cites}</div>
+            <div class="stat-lbl">Total Citations (Avg {avg_cites})</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-num">{year_range_str}</div>
+            <div class="stat-lbl">Publication Span</div>
+        </div>
+        {retracted_stat_html}
+    </div>
+
+    <main class="container">
+        <div class="toolbar">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Filter by title, author, journal, abstract..." oninput="applyFiltersAndSort()">
+            </div>
+            <select id="accessFilter" onchange="applyFiltersAndSort()">
+                <option value="all">All Access</option>
+                <option value="oa">Open Access Only</option>
+                <option value="closed">Closed Access Only</option>
+            </select>
+            <select id="typeFilter" onchange="applyFiltersAndSort()">
+                <option value="all">All Work Types</option>
+                {type_options}
+            </select>
+            <select id="sortSelect" onchange="applyFiltersAndSort()">
+                <option value="citations-desc">Citations (High &rarr; Low)</option>
+                <option value="year-desc">Year (Newest First)</option>
+                <option value="year-asc">Year (Oldest First)</option>
+                <option value="title-asc">Title (A &rarr; Z)</option>
+                <option value="fwci-desc">FWCI (High &rarr; Low)</option>
+            </select>
+            <button class="btn-toggle-all" onclick="toggleAllAbstracts()">Toggle All Abstracts</button>
+            <span class="count-badge" id="countDisplay">Showing {len(rows)} of {len(rows)} records</span>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="col-rank">#</th>
+                        <th class="col-details">Work Details</th>
+                        <th class="col-venue">Venue &amp; Date</th>
+                        <th class="col-metrics">Metrics</th>
+                        <th class="col-access">Access &amp; Links</th>
+                    </tr>
+                </thead>
+                <tbody id="recordsTbody">
+                    {body_rows_html}
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <script>
+        function applyFiltersAndSort() {{
+            const q = document.getElementById("searchInput").value.toLowerCase().trim();
+            const access = document.getElementById("accessFilter").value;
+            const type = document.getElementById("typeFilter").value;
+            const sort = document.getElementById("sortSelect").value;
+            const tbody = document.getElementById("recordsTbody");
+            const rows = Array.from(tbody.querySelectorAll("tr"));
+
+            let visible = 0;
+            rows.forEach(row => {{
+                const title = (row.dataset.title || "").toLowerCase();
+                const authors = (row.dataset.authors || "").toLowerCase();
+                const journal = (row.dataset.journal || "").toLowerCase();
+                const absElem = row.querySelector(".abstract-content");
+                const abstract = absElem ? absElem.innerText.toLowerCase() : "";
+
+                const matchesQuery = !q || title.includes(q) || authors.includes(q) || journal.includes(q) || abstract.includes(q);
+                const matchesAccess = access === "all" || row.dataset.oa === access;
+                const matchesType = type === "all" || row.dataset.type.toLowerCase() === type.toLowerCase();
+
+                if (matchesQuery && matchesAccess && matchesType) {{
+                    row.style.display = "";
+                    visible++;
+                }} else {{
+                    row.style.display = "none";
+                }}
+            }});
+
+            rows.sort((a, b) => {{
+                if (sort === "citations-desc") {{
+                    return (parseFloat(b.dataset.cites) || 0) - (parseFloat(a.dataset.cites) || 0);
+                }} else if (sort === "year-desc") {{
+                    return (parseInt(b.dataset.year) || 0) - (parseInt(a.dataset.year) || 0);
+                }} else if (sort === "year-asc") {{
+                    return (parseInt(a.dataset.year) || 0) - (parseInt(b.dataset.year) || 0);
+                }} else if (sort === "title-asc") {{
+                    return (a.dataset.title || "").localeCompare(b.dataset.title || "");
+                }} else if (sort === "fwci-desc") {{
+                    return (parseFloat(b.dataset.fwci) || 0) - (parseFloat(a.dataset.fwci) || 0);
+                }}
+                return (parseInt(a.dataset.rank) || 0) - (parseInt(b.dataset.rank) || 0);
+            }});
+
+            rows.forEach(r => tbody.appendChild(r));
+            document.getElementById("countDisplay").innerText = `Showing ${{visible}} of ${{rows.length}} records`;
+        }}
+
+        function toggleRowAbstract(btn) {{
+            const content = btn.nextElementSibling;
+            if (!content) return;
+            const isHidden = content.style.display === "none" || !content.style.display;
+            if (isHidden) {{
+                content.style.display = "block";
+                btn.innerText = "Hide Abstract";
+                btn.classList.add("active");
+            }} else {{
+                content.style.display = "none";
+                btn.innerText = "Show Abstract";
+                btn.classList.remove("active");
+            }}
+        }}
+
+        let allExpanded = false;
+        function toggleAllAbstracts() {{
+            allExpanded = !allExpanded;
+            const buttons = document.querySelectorAll(".btn-abstract");
+            buttons.forEach(btn => {{
+                const content = btn.nextElementSibling;
+                if (content) {{
+                    content.style.display = allExpanded ? "block" : "none";
+                    btn.innerText = allExpanded ? "Hide Abstract" : "Show Abstract";
+                    if (allExpanded) btn.classList.add("active"); else btn.classList.remove("active");
+                }}
+            }});
+        }}
+    </script>
+</body>
+</html>
+"""
+    path.write_text(html_content, encoding="utf-8")
+
+
 # --------------------------------------------------------------------------
 # PDF fetching (open access only, never a metered endpoint)
 # --------------------------------------------------------------------------
@@ -796,15 +1632,51 @@ def finalize(client: Client, works: list[dict], args: argparse.Namespace, *,
         provenance["Note"] = ("Run stopped early on the free daily budget - "
                               "these are partial results.")
 
-    write_csv(rows, out_dir / "results.csv")
-    write_jsonl(works, out_dir / "results.jsonl")
-    write_report(rows, out_dir / "report.md", title=title,
+    use_raw_dir = not getattr(args, "flat", False)
+    data_dir = out_dir / "raw" if use_raw_dir else out_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = data_dir / "results.csv"
+    jsonl_path = data_dir / "results.jsonl"
+    md_path = out_dir / "report.md"
+
+    write_csv(rows, csv_path)
+    write_jsonl(works, jsonl_path)
+    write_report(rows, md_path, title=title,
                  provenance=provenance, abstract_chars=args.abstract_chars)
 
+    gen_html = getattr(args, "html", False) or getattr(args, "all", False)
+    gen_ris = getattr(args, "ris", False) or getattr(args, "citations", False) or getattr(args, "all", False)
+    gen_enw = getattr(args, "enw", False) or getattr(args, "citations", False) or getattr(args, "all", False)
+
+    html_path = out_dir / "report.html" if gen_html else None
+    ris_path = out_dir / "references.ris" if gen_ris else None
+    enw_path = out_dir / "references.enw" if gen_enw else None
+
+    if gen_html:
+        write_html_report(rows, html_path, title=title,
+                          provenance=provenance, abstract_chars=args.abstract_chars)
+    if gen_ris:
+        write_ris(rows, ris_path)
+    if gen_enw:
+        write_enw(rows, enw_path)
+
     print(f"\n[done] {len(rows)} records -> {out_dir}", file=sys.stderr)
-    print(f"  report.md     screening report (markdown)", file=sys.stderr)
-    print(f"  results.csv   Excel-ready (UTF-8 BOM)", file=sys.stderr)
-    print(f"  results.jsonl raw OpenAlex records", file=sys.stderr)
+    print(f"  report.md        screening report (markdown)", file=sys.stderr)
+    if html_path:
+        print(f"  report.html      interactive screening report (HTML)", file=sys.stderr)
+    if ris_path:
+        print(f"  references.ris   universal RIS citation file", file=sys.stderr)
+    if enw_path:
+        print(f"  references.enw   EndNote tagged citation file", file=sys.stderr)
+    try:
+        csv_rel = csv_path.relative_to(out_dir)
+        jsonl_rel = jsonl_path.relative_to(out_dir)
+    except ValueError:
+        csv_rel = csv_path.name
+        jsonl_rel = jsonl_path.name
+    print(f"  {csv_rel}  Excel-ready (UTF-8 BOM)", file=sys.stderr)
+    print(f"  {jsonl_rel} raw OpenAlex records", file=sys.stderr)
     print(f"[budget] {client.budget_line()}", file=sys.stderr)
 
     # Compact stdout summary: this is what the agent reads back.
@@ -815,6 +1687,14 @@ def finalize(client: Client, works: list[dict], args: argparse.Namespace, *,
         "api_calls": client.calls,
         "cost_usd": round(client.session_cost, 5),
         "remaining_usd": client.remaining_usd,
+        "files": {
+            "report_md": str(md_path),
+            "report_html": str(html_path) if html_path else None,
+            "references_ris": str(ris_path) if ris_path else None,
+            "references_enw": str(enw_path) if enw_path else None,
+            "raw_csv": str(csv_path),
+            "raw_jsonl": str(jsonl_path),
+        },
         "top": [
             {"rank": r["rank"], "title": r["title"][:120], "year": r["year"],
              "cited_by_count": r["cited_by_count"], "doi": r["doi"],
@@ -1147,6 +2027,94 @@ def cmd_budget(args: argparse.Namespace) -> None:
     }, indent=2))
 
 
+def cmd_report(args: argparse.Namespace) -> None:
+    """Offline report generation from an existing results directory."""
+    target_dir = Path(args.dir).expanduser().resolve()
+    if not target_dir.is_dir():
+        print(f"ERROR: {target_dir} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    candidates = [
+        target_dir / "raw" / "results.jsonl",
+        target_dir / "results.jsonl",
+        target_dir / "raw" / "results.csv",
+        target_dir / "results.csv",
+    ]
+    data_file = None
+    for c in candidates:
+        if c.is_file():
+            data_file = c
+            break
+
+    if not data_file:
+        print(f"ERROR: No results.jsonl or results.csv found in {target_dir} or {target_dir}/raw", file=sys.stderr)
+        sys.exit(1)
+
+    rows: list[dict] = []
+    if data_file.suffix == ".jsonl":
+        works = []
+        with data_file.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    works.append(json.loads(line))
+        rows = [flatten(w, i) for i, w in enumerate(works, start=1)]
+    else:
+        with data_file.open("r", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            for i, r in enumerate(reader, start=1):
+                r["rank"] = i
+                r["is_oa"] = str(r.get("is_oa", "")).lower() in ("true", "1")
+                r["is_retracted"] = str(r.get("is_retracted", "")).lower() in ("true", "1")
+                try:
+                    r["cited_by_count"] = int(r.get("cited_by_count") or 0)
+                except (ValueError, TypeError):
+                    r["cited_by_count"] = 0
+                rows.append(r)
+
+    title = args.title or f"Literature Report: {target_dir.name.replace('_', ' ').title()}"
+    provenance = {"Source Directory": str(target_dir), "Records": len(rows), "Mode": "Offline Report"}
+
+    has_specific = any([args.html, args.ris, args.enw, args.citations, args.md])
+    do_all = args.all or not has_specific
+
+    gen_html = args.html or args.all or do_all
+    gen_ris = args.ris or args.citations or args.all or do_all
+    gen_enw = args.enw or args.citations or args.all or do_all
+    gen_md = args.md or args.all or do_all
+
+    if getattr(args, "organize_raw", False):
+        raw_dir = target_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        for fn in ("results.csv", "results.jsonl"):
+            src = target_dir / fn
+            if src.is_file():
+                dest = raw_dir / fn
+                if not dest.exists():
+                    src.replace(dest)
+
+    if gen_md:
+        write_report(rows, target_dir / "report.md", title=title,
+                     provenance=provenance, abstract_chars=args.abstract_chars)
+    if gen_html:
+        write_html_report(rows, target_dir / "report.html", title=title,
+                          provenance=provenance, abstract_chars=args.abstract_chars)
+    if gen_ris:
+        write_ris(rows, target_dir / "references.ris")
+    if gen_enw:
+        write_enw(rows, target_dir / "references.enw")
+
+    print(f"\n[report done] {len(rows)} records processed in {target_dir}", file=sys.stderr)
+    if gen_md:
+        print(f"  report.md        screening report (markdown)", file=sys.stderr)
+    if gen_html:
+        print(f"  report.html      interactive screening report (HTML)", file=sys.stderr)
+    if gen_ris:
+        print(f"  references.ris   universal RIS citation file", file=sys.stderr)
+    if gen_enw:
+        print(f"  references.enw   EndNote tagged citation file", file=sys.stderr)
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -1161,6 +2129,18 @@ def add_output_args(parser: argparse.ArgumentParser, default_dir: str) -> None:
                              "(free sources only; never a metered endpoint)")
     parser.add_argument("--abstract-chars", type=int, default=700,
                         help="abstract characters per entry in report.md")
+    parser.add_argument("--html", action="store_true",
+                        help="generate interactive HTML screening report (<out>/report.html)")
+    parser.add_argument("--ris", action="store_true",
+                        help="generate universal RIS citation file (<out>/references.ris)")
+    parser.add_argument("--enw", action="store_true",
+                        help="generate EndNote tagged citation file (<out>/references.enw)")
+    parser.add_argument("--citations", action="store_true",
+                        help="shortcut: generate both RIS and ENW citation files")
+    parser.add_argument("--all", action="store_true",
+                        help="generate all report and citation formats (HTML, RIS, ENW)")
+    parser.add_argument("--flat", action="store_true",
+                        help="keep raw results.csv and results.jsonl in root output directory instead of raw/ subdirectory")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1263,6 +2243,29 @@ examples:
     # budget
     p = sub.add_parser("budget", help="show remaining free daily API budget")
     p.set_defaults(func=cmd_budget)
+
+    # report
+    p = sub.add_parser("report",
+                       help="generate HTML/citation reports offline from an existing results directory")
+    p.add_argument("dir", help="existing results directory containing results.jsonl or results.csv")
+    p.add_argument("--title", help="report title (defaults to directory name)")
+    p.add_argument("--abstract-chars", type=int, default=700,
+                   help="abstract characters per entry in report.md")
+    p.add_argument("--html", action="store_true",
+                   help="generate interactive HTML screening report")
+    p.add_argument("--ris", action="store_true",
+                   help="generate universal RIS citation file")
+    p.add_argument("--enw", action="store_true",
+                   help="generate EndNote tagged citation file")
+    p.add_argument("--citations", action="store_true",
+                   help="shortcut: generate both RIS and ENW citation files")
+    p.add_argument("--md", action="store_true",
+                   help="regenerate markdown report (report.md)")
+    p.add_argument("--all", action="store_true",
+                   help="generate all report formats (HTML, RIS, ENW, MD)")
+    p.add_argument("--organize-raw", action="store_true",
+                   help="move existing results.csv/results.jsonl into raw/ subdirectory if in root")
+    p.set_defaults(func=cmd_report)
 
     return parser
 

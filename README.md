@@ -1,316 +1,220 @@
 # openalex-search
 
-A [Claude Code](https://claude.com/claude-code) skill for literature search over
-[OpenAlex](https://openalex.org) — ~300M scholarly works, fully open, free to query.
+A universal skill and CLI for literature search over [OpenAlex](https://openalex.org) (~300M scholarly works, fully open, free to query).
 
-Ask in plain English; get back a screening report, an Excel-ready CSV, and the
-open-access PDFs.
+Designed for **any AI coding assistant** ([Claude Code](https://claude.com/claude-code), [Google Antigravity / Gemini CLI](https://github.com/google-gemini), [Cursor](https://cursor.com), Windsurf, Roo Code, Cline) or as a **standalone command-line tool**.
 
-> *"find papers on radiolysis of molten chlorides since 2020, grab the OA PDFs"*
+Ask in plain English; get back screening reports, interactive HTML dashboards, 1-click EndNote libraries, universal RIS references, Excel-ready tables, and open-access PDFs:
+
+> *"find papers on radiolysis of molten chlorides since 2020 with --html and --citations, and grab the OA PDFs"*
+>
+> *"generate an EndNote database and interactive HTML report for my search results"*
 >
 > *"who has cited 10.1039/d3cp01477k?"*
 >
 > *"here's my draft abstract: … — what existing work is closest to it?"*
 
-It also works as a standalone CLI with no Claude involved.
+---
+
+## Key Features
+
+- **No hallucinated citations**: Every single record is a verified OpenAlex entity with a DOI, author list, publication venue, and metric history. Nothing is AI-generated.
+- **EndNote & RIS Citation Export**: Generates native EndNote tagged files (`references.enw`) for 1-click library import on Windows/macOS, plus universal RIS (`references.ris`) for Zotero, Mendeley, and Reference Manager.
+- **Interactive HTML Reports**: Generates standalone, responsive HTML dashboards (`report.html`) with instant client-side search, open-access and publication type filters, multi-column sorting (citations, year, title, FWCI), and collapsible abstract drawers.
+- **Tidy Directory Structure**: Deliverables (`report.md`, `report.html`, `references.ris`, `references.enw`, `pdfs/`) stay in the root folder, while data dumps (`results.csv`, `results.jsonl`) are neatly organized in `raw/`.
+- **Offline Re-Export (`report` subcommand)**: Re-generate reports or citation files from any existing search directory offline with 0 API calls and $0 cost.
+- **Strict Cost Safety**: Free-tier safe. Automatically tracks rate-limit headers and enforces a hard stop before hitting budget limits.
+- **Zero Third-Party Dependencies**: Pure Python standard library only. Nothing to `pip install`.
 
 ---
 
-## Why this instead of asking an LLM directly
-
-- **No hallucinated citations.** Every record is a real OpenAlex entity with a
-  DOI. Nothing is generated.
-- **Cheap in tokens.** The CLI does the paginating and file-writing; only a
-  compact summary re-enters the model's context. Result sets of hundreds of
-  papers cost roughly the same in tokens as a handful.
-- **Costs you nothing.** OpenAlex's free tier is enforced in code — see
-  [Cost safety](#cost-safety).
-- **Reproducible.** Every run records the exact query, filters, and match count
-  in the report, and keeps the raw JSON so re-analysis needs no new API calls.
-
 ## Requirements
 
-- **Python 3.9+** — standard library only, nothing to `pip install`
-- **Claude Code** (optional — the CLI works on its own)
-- **An OpenAlex API key** (optional, free, 30 seconds) —
-  [openalex.org/settings/api](https://openalex.org/settings/api).
-  Without one you get $0.10/day of free usage instead of $1.00/day.
+- **Python 3.9+** (standard library only)
+- **Any AI Assistant** (Claude Code, Gemini CLI, Antigravity, Cursor, Roo Code, Cline) or a standard terminal shell.
+- **An OpenAlex API key** (optional, free, 30 seconds) — [openalex.org/settings/api](https://openalex.org/settings/api). Raises free daily quota from $0.10/day to $1.00/day (~100 → 1,000 searches/day).
 
-## Install
+---
+
+## Installation for Any AI
+
+Clone the repository:
 
 ```bash
 git clone https://github.com/gabzsi/openalex-search-skill.git
 cd openalex-search-skill
 ```
 
-**Windows (PowerShell):**
+### Option 1: Universal Auto-Detect Installer
 
-```bash
+The installer automatically detects which AI assistants are installed on your system (`~/.claude`, `~/.gemini`) and installs/updates the skill into all detected environments:
+
+**Windows (PowerShell):**
+```powershell
 .\install.ps1
 ```
 
 **macOS / Linux:**
-
 ```bash
 bash install.sh
 ```
 
-Either one copies the skill into `~/.claude/skills/openalex-search/`. Restart
-Claude Code afterwards so it picks up the new skill.
+### Option 2: Targeting Specific AI Assistants
 
-<details>
-<summary>Manual install, or installing without the script</summary>
+#### Google Antigravity / Gemini CLI
+```powershell
+# Windows
+.\install.ps1 -Gemini
 
-Copy `SKILL.md`, `reference.md`, `.env.example`, and `scripts/` into
-`~/.claude/skills/openalex-search/`. That directory *is* the skill — there is no
-build step and no registration to do.
+# macOS / Linux
+bash install.sh --gemini
+```
+Installs into `$HOME/.gemini/config/skills/openalex-search/`.
 
-You can also clone this repo directly into place, which makes `git pull` the
-update mechanism:
+#### Claude Code
+```powershell
+# Windows
+.\install.ps1 -Claude
+
+# macOS / Linux
+bash install.sh --claude
+```
+Installs into `$HOME/.claude/skills/openalex-search/`.
+
+#### Cursor / Windsurf / Roo Code / Cline / Custom
+```powershell
+# Windows
+.\install.ps1 -Path "C:\path\to\your\agent\skills\openalex-search"
+
+# macOS / Linux
+bash install.sh --path "/path/to/your/agent/skills/openalex-search"
+```
+Or simply point your assistant's system instructions or rules file to `scripts/openalex.py`.
+
+---
+
+## Setting up Your API Key (Optional)
+
+Everything works out of the box without a key on OpenAlex's free tier. Adding a free key raises your daily limit from $0.10 to $1.00 (~1,000 searches/day).
+
+1. Get a key in 30 seconds at **[openalex.org/settings/api](https://openalex.org/settings/api)**.
+2. Save it to `openalex_key.txt` in your user home directory:
+   - **Windows:** `echo YOUR_KEY_HERE>"%USERPROFILE%\openalex_key.txt"`
+   - **macOS / Linux:** `echo "YOUR_KEY_HERE" > ~/.openalex_key`
+3. Check remaining budget anytime:
+   ```bash
+   python scripts/openalex.py budget
+   ```
+
+---
+
+## Output Structure
+
+Each search or citation run outputs a clean, uncluttered directory:
+
+```
+my_literature_search/
+├── report.md           # Markdown screening report
+├── report.html         # Interactive HTML report (with --html or --all)
+├── references.ris      # Universal RIS citation library (with --ris, --citations, or --all)
+├── references.enw      # Native EndNote tagged library (with --enw, --citations, or --all)
+├── pdfs/               # Open-access PDFs (with --pdfs)
+└── raw/                # Structured data archives
+    ├── results.csv     # Excel-ready spreadsheet (UTF-8 BOM, 32 columns)
+    └── results.jsonl   # Full raw OpenAlex JSON entities
+```
+
+---
+
+## Usage Guide
+
+### 1. In AI Chat (Claude Code, Gemini CLI, Cursor, etc.)
+
+Just speak naturally:
+- *"Search for recent papers on pulse radiolysis of amides and create an HTML report and EndNote database."*
+- *"Find all papers citing 10.1021/ja00716a011 with citations export."*
+- *"Re-generate the HTML report and RIS file for my previous search in `results/amides` without re-querying OpenAlex."*
+
+### 2. Standalone CLI Usage
 
 ```bash
-git clone https://github.com/gabzsi/openalex-search-skill.git ~/.claude/skills/openalex-search
-```
-</details>
+# Path to script
+OA="scripts/openalex.py"
 
-## Add your API key
+# Topic screening with HTML report & EndNote export
+python "$OA" search "solvated electron acetamide" --from-year 2010 --limit 50 --all --out results/acetamide
 
-**Optional** — everything works without one. A free key just raises your daily
-budget from $0.10 to $1.00 (roughly 100 searches/day → 1,000).
+# Fast citation chasing
+python "$OA" cited-by 10.1021/ja00716a011 --limit 100 --citations --out results/cited_hayon
+python "$OA" references 10.1021/ja00716a011 --all --out results/hayon_refs
 
-### 1. Get the key
+# Co-citation (papers citing BOTH seeds)
+python "$OA" cited-by 10.1021/ja00716a011 10.1063/1.1678690 --all --out results/cocitation
 
-Go to **[openalex.org/settings/api](https://openalex.org/settings/api)**, sign
-in (~30 seconds, no payment details), and copy the key.
+# Bibliographic coupling (shared references)
+python "$OA" coupling 10.1021/ja00716a011 10.1063/1.1678690 --out results/coupling
 
-### 2. Save it to a file
-
-The file holds **the key and nothing else** — no `OPENALEX_API_KEY=`, no
-quotes, no comments. A trailing newline is fine.
-
-**Windows.** The simplest reliable route is Notepad. In Command Prompt:
-
-```bat
-notepad "%USERPROFILE%\openalex_key.txt"
+# Offline report generation (0 API calls, reads existing results.jsonl / results.csv)
+python "$OA" report results/acetamide --all
 ```
 
-Notepad says the file doesn't exist and offers to create it — say yes. Paste
-the key, Ctrl+S, close.
+---
 
-> **Watch for `openalex_key.txt.txt`.** Windows hides known extensions by
-> default, so Notepad's Save As can silently double them. Turn on
-> **View → File name extensions** in Explorer to see the real name.
+## CLI Flags Reference
 
-Or, as a one-liner (note: *no space* before `>`, or the space lands in the
-file):
-
-```bat
-echo YOUR_KEY_HERE>"%USERPROFILE%\openalex_key.txt"
-```
-
-**macOS / Linux:**
-
-```bash
-printf '%s' 'YOUR_KEY_HERE' > ~/.openalex_key
-chmod 600 ~/.openalex_key
-```
-
-### Where the key can live
-
-Checked in this order; the first hit wins:
-
-| Location | Notes |
+| Flag | Purpose |
 | --- | --- |
-| `OPENALEX_API_KEY` env var | Wins over every file. On Windows, `setx OPENALEX_API_KEY "…"` needs an app restart to take effect |
-| `OPENALEX_KEY` env var | Alternative name, same behaviour |
-| `~/.openalex_key` | Conventional on macOS/Linux |
-| `~/.openalex_key.txt` | For when Windows appends `.txt` |
-| `~/openalex_key.txt` | Simplest on Windows |
-| `~/openalex_api_key.txt` | Also accepted |
-| `<skill dir>/.env` | Copy `.env.example` and fill it in |
+| `--html` | Generate interactive standalone HTML report (`report.html`) |
+| `--ris` | Generate universal RIS reference library (`references.ris`) |
+| `--enw` | Generate native EndNote tagged library (`references.enw`) |
+| `--citations` | Shortcut to generate both `references.ris` and `references.enw` |
+| `--all` | Generate all deliverables (Markdown, HTML, RIS, ENW, CSV, JSONL) |
+| `--flat` | Keep raw CSV and JSONL in root directory instead of `raw/` |
+| `--pdfs` | Download open-access PDFs into `pdfs/` |
+| `--limit N` | Max records to retrieve (default: 50) |
+| `--from-year Y` | Minimum publication year |
+| `--to-year Y` | Maximum publication year |
+| `--min-citations N`| Minimum citation threshold |
+| `--oa-only` | Filter to open-access works only |
+| `--has-abstract` | Filter to records with an abstract |
+| `--semantic` | Vector embedding search for abstracts/paragraphs (max 50) |
+| `--exact` | Exact unstemmed search (required for wildcards like `radiol*`) |
 
-Placeholder values (`paste_your_key_here`, `<your key>`, …) are ignored, so an
-unedited `.env.example` copy won't break anything.
+---
 
-### 3. Verify
+## Importing into Reference Managers
 
-```bash
-python ~/.claude/skills/openalex-search/scripts/openalex.py budget
-```
+### EndNote
+- **Method 1 (Instant):** Double-click `references.enw` in Windows Explorer or macOS Finder. EndNote launches and imports all records into your current library.
+- **Method 2:** In EndNote, choose `File > Import > File...`, select `references.ris`, and choose import option **Reference Manager (RIS)**.
 
-PowerShell needs a different path form — see the note below.
+### Zotero & Mendeley
+- Select `File > Import...` and select `references.ris`.
 
-```json
-{
-  "api_key": "set",
-  "daily_limit_usd": 1.0,
-  "remaining_usd": 0.9998,
-  "prepaid_remaining_usd": 0.0
-}
-```
+---
 
-`"api_key": "set"` and `"daily_limit_usd": 1.0` means you're done.
+## Cost Safety & Free Tier Details
 
-> **Path forms differ by shell.** PowerShell does *not* expand `~` in arguments
-> to a native executable — it passes the tilde through literally and Python
-> can't find the file.
->
-> | Shell | Use |
-> | --- | --- |
-> | bash / zsh | `python ~/.claude/skills/openalex-search/scripts/openalex.py budget` |
-> | PowerShell | `python $HOME\.claude\skills\openalex-search\scripts\openalex.py budget` |
-> | cmd.exe | `python "%USERPROFILE%\.claude\skills\openalex-search\scripts\openalex.py" budget` |
-
-### Still shows `"daily_limit_usd": 0.1`?
-
-| Cause | Fix |
-| --- | --- |
-| File is really `openalex_key.txt.txt` | Enable **View → File name extensions** and rename |
-| File saved somewhere other than your home folder | Confirm with `echo %USERPROFILE%` (Windows) or `echo $HOME` |
-| File has notes or several lines in it | Keep it to the key alone. An `OPENALEX_API_KEY=…` line *is* understood, but stray extra lines are not |
-| Value looks like a placeholder | Values containing whitespace, `<`/`>`, or markers like `paste`/`changeme`/`your_key` are ignored on purpose. Real alphanumeric keys are never caught by this |
-| Set via `setx` | Fully quit and reopen your terminal *and* Claude Code |
-
-You are never charged for getting this wrong — without a key the tool just
-runs on the smaller free budget.
-
-## Usage
-
-### Through Claude Code
-
-Just ask. The skill auto-triggers on literature-search phrasing, in any project
-directory. If a request is ambiguous, name it explicitly:
-
-> use the openalex-search skill to find …
-
-### As a CLI
-
-```bash
-OA=~/.claude/skills/openalex-search/scripts/openalex.py
-
-# Topic screening
-python $OA search "solvated electron molten salt" --from-year 2020 --limit 30 --pdfs --out results/melts
-
-# Semantic search — for a pasted abstract or paragraph, not keywords
-python $OA search "We measure the decay kinetics of solvated electrons in
-  high-temperature chloride melts after an electron pulse." --semantic --limit 40
-
-# Citation chasing
-python $OA cited-by   10.1039/d3cp01477k --limit 100   # who cites this
-python $OA references 10.1039/d3cp01477k               # what it cites
-python $OA cited-by   W1926950498 W2116507044          # co-citation (cites BOTH)
-python $OA coupling   W1926950498 W3008264207          # shared references
-python $OA related    10.1039/d3cp01477k
-
-# Names are ambiguous — resolve to an ID first, then filter on it
-python $OA resolve sources "Journal of Physical Chemistry A"
-python $OA search "solvated electron" --journal S123456789
-
-python $OA budget
-```
-
-`python $OA --help` documents every flag.
-
-### Commands
-
-| Command | Does |
-| --- | --- |
-| `search` | Text and/or filtered search over works |
-| `cited-by` | Works citing the seed; 2+ seeds gives co-citation |
-| `references` | The seed's own reference list |
-| `coupling` | References shared by all seeds (bibliographic coupling) |
-| `related` | OpenAlex's algorithmic neighbours |
-| `resolve` | Name → OpenAlex ID for authors/sources/institutions/topics/funders/publishers |
-| `get` | One work by DOI or ID (free) |
-| `budget` | Remaining free daily budget |
-
-### Search modes
-
-| Mode | When |
-| --- | --- |
-| default | Stemmed full-text. Supports `AND`/`OR`/`NOT`, `"phrases"`, `"a b"~5` proximity |
-| `--semantic` | You have an **abstract or paragraph**, not keywords. Finds conceptually related work whose wording differs. Max 50 results |
-| `--exact` | Unstemmed. **Required** for wildcards (`radiol*`, `wom?n`) |
-
-### Filters
-
-`--from-year` `--to-year` `--min-citations` `--type` `--oa-only`
-`--has-abstract` `--exclude-retracted` `--journal` `--author` `--institution`
-`--topic` `--filter` (raw passthrough) `--include-xpac`
-
-## Output
-
-Every run writes to `--out`:
-
-| File | Contents |
-| --- | --- |
-| `report.md` | Screening report — authors, venue, metrics, topic hierarchy, access links, abstract |
-| `results.csv` | 32 columns, UTF-8 with BOM so Excel handles accented names |
-| `results.jsonl` | Raw OpenAlex records, for re-analysis without re-querying |
-| `pdfs/` | Open-access PDFs (with `--pdfs`) |
-
-Titles are cleaned of publisher HTML, with chemistry rendered as Unicode:
-`Zn <sup>2+</sup>` → `Zn²⁺`, `Cl <sub>2</sub>` → `Cl₂`.
-
-## Cost safety
-
-OpenAlex is freemium. This tool is built to stay inside the free tier:
-
-- It **never** calls a metered content endpoint. PDFs come only from
-  open-access publisher/repository links, which are not billed.
-- It reads `X-RateLimit-Remaining-USD` on every response and **stops before the
-  daily budget reaches zero**, keeping whatever it has already written.
-- With no prepaid balance on your account, exceeding the daily budget returns
-  HTTP 429 — it *cannot* create a charge.
-
-Costs, for calibration:
-
-| Operation | Per call | Free tier/day (with key) |
+| Operation | Cost | Free Tier Capacity (with key) |
 | --- | --- | --- |
-| `get`, seed lookups | free | unlimited |
-| `cited-by`, `references`, `coupling`, `related` | $0.0001 | ~10,000 |
-| `search`, `resolve` | $0.001 | ~1,000 |
+| `get`, seed lookups | **Free** | Unlimited |
+| `report` (offline) | **Free** | Unlimited (0 API calls) |
+| `cited-by`, `references`, `coupling`, `related` | ~$0.0001 / call | ~10,000 / day |
+| `search`, `resolve` | ~$0.001 / call | ~1,000 / day |
 
-So citation chasing is ~10× cheaper than search — iterate there freely.
-Budget resets at midnight UTC.
+The tool never connects to metered content endpoints and stops automatically before daily budget exhaustion.
 
-## API quirks worth knowing
+---
 
-Found by testing against the live API (2026-07-30). Several contradict the
-official documentation, and are handled in the code:
+## Running Tests
 
-| Quirk | Reality |
-| --- | --- |
-| `sort=-cited_by_count` (per the docs) | Returns **400**. Use `field:desc` |
-| `cites:A+B` | Does **not** AND — silently returns only A's results. Use repeated filters `cites:A,cites:B` |
-| `per_page` max | **200**, not the documented 100 |
-| Semantic search | Rejects cursor pagination; capped at 1 req/sec and 50 results |
-| API key "required" | Not actually — it only raises the daily budget 10× |
-| `429` | Means **either** per-second throttling (has `retryAfter`, retry it) **or** daily budget spent (wait for UTC midnight) |
-| XPAC works | Bulk repository/DataCite records, excluded by default; `--include-xpac` roughly doubles counts |
-| Abstracts | Delivered as an inverted index, never plaintext. Reconstructed here. Some are genuinely truncated in OpenAlex |
+Verify the installation and export functions anytime:
 
-## Limitations
+```bash
+python tests/test_exports.py
+```
 
-- Metadata quality is OpenAlex's. Author disambiguation is good but not
-  perfect — always sanity-check an author profile before trusting a
-  publication list. Use `resolve authors` and inspect the candidates.
-- Abstract coverage is incomplete; `--has-abstract` filters to what exists.
-- `--pdfs` typically retrieves roughly half a result set. The rest are closed
-  access, or the OA link points at a landing page rather than a PDF. Those get
-  a DOI link in the report instead.
-- No BibTeX export yet. `results.csv` imports into Zotero/Excel fine.
-- `search` is limited to ~4 KB of URL, so very large Boolean queries (systematic
-  reviews) need splitting into chunks and unioning the IDs.
-
-## Credits
-
-Data from [OpenAlex](https://openalex.org), CC0. If you use it in research,
-cite:
-
-> Priem, J., Piwowar, H., & Orr, R. (2022). *OpenAlex: A fully-open index of
-> scholarly works, authors, venues, institutions, and concepts.*
-> arXiv:[2205.01833](https://arxiv.org/abs/2205.01833)
+---
 
 ## License
 

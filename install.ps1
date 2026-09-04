@@ -1,20 +1,34 @@
 <#
 .SYNOPSIS
-    Install the openalex-search skill into ~/.claude/skills/.
+    Install or update the openalex-search skill for any AI assistant.
 .DESCRIPTION
-    Copies SKILL.md, reference.md, .env.example and scripts/ into
-    $HOME\.claude\skills\openalex-search. Safe to re-run: it overwrites the
-    skill files but never touches a .env you have already filled in.
+    Installs openalex-search into Claude Code, Google Antigravity / Gemini CLI,
+    or custom agent directory. Supports auto-detecting all installed AI assistants.
+    Safe to re-run: updates skill files without touching existing .env or API keys.
+.PARAMETER TargetAll
+    Install to all detected AI assistants (Claude Code, Gemini CLI / Antigravity).
+.PARAMETER Claude
+    Install specifically into ~/.claude/skills/openalex-search.
+.PARAMETER Gemini
+    Install specifically into ~/.gemini/config/skills/openalex-search.
+.PARAMETER Path
+    Install into a custom target directory.
 #>
+[CmdletBinding()]
+param(
+    [switch]$TargetAll,
+    [switch]$Claude,
+    [switch]$Gemini,
+    [string]$Path = ""
+)
 
 $ErrorActionPreference = "Stop"
-
 $source = $PSScriptRoot
-$target = Join-Path $HOME ".claude\skills\openalex-search"
 
-Write-Host "Installing openalex-search" -ForegroundColor Cyan
-Write-Host "  from: $source"
-Write-Host "  to:   $target"
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "     OpenAlex Literature Search Skill - Universal Installer" -ForegroundColor Cyan
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "Source: $source"
 
 # --- Python check -----------------------------------------------------------
 try {
@@ -24,53 +38,113 @@ try {
     Write-Host "Install Python 3.9 or newer from https://python.org and re-run."
     exit 1
 }
-Write-Host "  python: $pythonVersion"
+Write-Host "Python: $pythonVersion" -ForegroundColor Green
 
-# --- Copy -------------------------------------------------------------------
-New-Item -ItemType Directory -Force -Path (Join-Path $target "scripts") | Out-Null
+# --- Resolve target directories --------------------------------------------
+$targetDirs = @()
 
-foreach ($item in @("SKILL.md", "reference.md", ".env.example")) {
-    $from = Join-Path $source $item
-    if (Test-Path $from) {
-        Copy-Item $from (Join-Path $target $item) -Force
-        Write-Host "  + $item"
+if ($Path) {
+    $targetDirs += (Resolve-Path -Path $Path -ErrorAction SilentlyContinue).Path
+    if (-not $targetDirs[0]) {
+        $targetDirs = @($Path)
+    }
+} elseif ($Claude) {
+    $targetDirs += (Join-Path $HOME ".claude\skills\openalex-search")
+} elseif ($Gemini) {
+    $targetDirs += (Join-Path $HOME ".gemini\config\skills\openalex-search")
+} elseif ($TargetAll) {
+    $targetDirs += (Join-Path $HOME ".claude\skills\openalex-search")
+    $targetDirs += (Join-Path $HOME ".gemini\config\skills\openalex-search")
+} else {
+    # Auto-detect installed AI environments
+    $claudeBase = Join-Path $HOME ".claude"
+    $geminiBase = Join-Path $HOME ".gemini"
+    
+    if (Test-Path $claudeBase) {
+        $targetDirs += (Join-Path $HOME ".claude\skills\openalex-search")
+    }
+    if (Test-Path $geminiBase) {
+        $targetDirs += (Join-Path $HOME ".gemini\config\skills\openalex-search")
+    }
+    
+    # If neither directory exists yet, default to Claude Code standard
+    if ($targetDirs.Count -eq 0) {
+        $targetDirs += (Join-Path $HOME ".claude\skills\openalex-search")
     }
 }
-Copy-Item (Join-Path $source "scripts\openalex.py") `
-          (Join-Path $target "scripts\openalex.py") -Force
-Write-Host "  + scripts/openalex.py"
 
-# --- Verify -----------------------------------------------------------------
-$cli = Join-Path $target "scripts\openalex.py"
-Write-Host "`nVerifying..." -ForegroundColor Cyan
-$null = python $cli --help
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: the CLI did not run correctly." -ForegroundColor Red
-    exit 1
+# Remove duplicates if any
+$targetDirs = $targetDirs | Select-Object -Unique
+
+# --- Perform installation for each target ------------------------------------
+$resolvedSource = (Resolve-Path $source).Path
+
+foreach ($target in $targetDirs) {
+    Write-Host "`nInstalling to: $target" -ForegroundColor Yellow
+    New-Item -ItemType Directory -Force -Path (Join-Path $target "scripts") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $target "tests") | Out-Null
+
+    $resolvedTarget = (Resolve-Path $target -ErrorAction SilentlyContinue)
+    $isSelf = $resolvedTarget -and ($resolvedSource -eq $resolvedTarget.Path)
+
+    if (-not $isSelf) {
+        # Copy metadata and docs
+        foreach ($item in @("SKILL.md", "reference.md", "README.md", "LICENSE", ".env.example")) {
+            $from = Join-Path $source $item
+            if (Test-Path $from) {
+                Copy-Item $from (Join-Path $target $item) -Force
+                Write-Host "  + $item"
+            }
+        }
+
+        # Copy script
+        Copy-Item (Join-Path $source "scripts\openalex.py") `
+                  (Join-Path $target "scripts\openalex.py") -Force
+        Write-Host "  + scripts/openalex.py"
+
+        # Copy tests if present
+        if (Test-Path (Join-Path $source "tests\test_exports.py")) {
+            Copy-Item (Join-Path $source "tests\test_exports.py") `
+                      (Join-Path $target "tests\test_exports.py") -Force
+            Write-Host "  + tests/test_exports.py"
+        }
+    } else {
+        Write-Host "  (Target is current source directory; verified in-place)"
+    }
+
+    # Verify execution
+    $cli = Join-Path $target "scripts\openalex.py"
+    $null = python $cli --help
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: CLI verification failed at $cli" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  [OK] CLI verified successfully." -ForegroundColor Green
 }
-Write-Host "  CLI runs."
 
-# --- API key ----------------------------------------------------------------
+# --- API key check ----------------------------------------------------------
 $keyFiles = @(
     (Join-Path $HOME "openalex_key.txt"),
     (Join-Path $HOME ".openalex_key"),
     (Join-Path $HOME ".openalex_key.txt"),
-    (Join-Path $HOME "openalex_api_key.txt"),
-    (Join-Path $target ".env")
+    (Join-Path $HOME "openalex_api_key.txt")
 )
 $haveKey = $env:OPENALEX_API_KEY -or ($keyFiles | Where-Object { Test-Path $_ })
 
-Write-Host "`nDone." -ForegroundColor Green
+Write-Host "`n==========================================================" -ForegroundColor Cyan
+Write-Host "Installation Complete!" -ForegroundColor Green
+Write-Host "==========================================================" -ForegroundColor Cyan
+
 if (-not $haveKey) {
-    Write-Host ""
-    Write-Host "No API key found. It is optional, but a free key raises your" -ForegroundColor Yellow
-    Write-Host "daily budget from `$0.10 to `$1.00." -ForegroundColor Yellow
-    Write-Host "  1. Get one at https://openalex.org/settings/api"
-    Write-Host "  2. Save it, and nothing else, to: $(Join-Path $HOME 'openalex_key.txt')"
+    Write-Host "`n[Note] No OpenAlex API key found." -ForegroundColor Yellow
+    Write-Host "The tool runs completely free without a key ($0.10/day budget)."
+    Write-Host "A free key raises your daily budget 10x ($1.00/day):"
+    Write-Host "  1. Get a key at https://openalex.org/settings/api"
+    Write-Host "  2. Save it to: $(Join-Path $HOME 'openalex_key.txt')"
 }
-Write-Host ""
-Write-Host "Restart Claude Code so it picks up the new skill, then just ask:"
-Write-Host '  "find recent papers on <your topic> and grab the open-access PDFs"'
-Write-Host ""
-Write-Host "Or run it directly:"
-Write-Host "  python `"$cli`" --help"
+
+Write-Host "`nUsage with your AI Assistants:" -ForegroundColor Cyan
+Write-Host "  Claude Code:           Ask 'Search papers on <topic> with --html and --citations'"
+Write-Host "  Gemini / Antigravity:  Ask 'Search papers on <topic> with --html and --citations'"
+Write-Host "  Cursor / Roo / Cline:  Reference $cli in rules or prompt"
+Write-Host "  Terminal CLI:          python `"$($targetDirs[0])\scripts\openalex.py`" --help"

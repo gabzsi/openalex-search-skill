@@ -1,6 +1,6 @@
 ---
 name: openalex-search
-description: Search the scholarly literature via OpenAlex - find papers on a topic, screen a candidate set, chase citations forward or backward, pull an author's or journal's output, resolve DOIs/ORCIDs, and download open-access PDFs. Produces a markdown screening report plus an Excel-ready CSV. Use whenever the user wants to find, screen, or trace academic papers, references, citations, or bibliographies.
+description: Search the scholarly literature via OpenAlex - find papers on a topic, screen candidate sets, chase citations, download open-access PDFs, export EndNote (.enw) and RIS (.ris) citation libraries, and generate interactive HTML reports. Use whenever the user wants to find, screen, trace, or export academic papers, bibliographies, or EndNote databases.
 ---
 
 # OpenAlex literature search
@@ -11,15 +11,16 @@ OpenAlex URLs or use WebFetch against api.openalex.org** — use this CLI, so
 cost tracking and the free-tier guard stay in force.
 
 ```
-OA = ~/.claude/skills/openalex-search/scripts/openalex.py
+OA = path to scripts/openalex.py (e.g. ~/.claude/skills/openalex-search/scripts/openalex.py or ~/.gemini/config/skills/openalex-search/scripts/openalex.py)
 ```
 
 Run as `python "<OA>" <command> ...`. Substitute the right home-directory form
-for the shell you are using — **verified, they differ**:
+for the shell and agent you are using:
 
-| Shell | Path to use |
+| Environment | Path to use |
 | --- | --- |
-| bash / zsh | `~/.claude/skills/openalex-search/scripts/openalex.py` |
+| Claude Code | `$HOME/.claude/skills/openalex-search/scripts/openalex.py` |
+| Gemini / Antigravity | `$HOME/.gemini/config/skills/openalex-search/scripts/openalex.py` |
 | PowerShell | `$HOME\.claude\skills\openalex-search\scripts\openalex.py` |
 | cmd.exe | `"%USERPROFILE%\.claude\skills\openalex-search\scripts\openalex.py"` |
 
@@ -40,6 +41,7 @@ Your part:
 | Operation | Cost | Notes |
 | --- | --- | --- |
 | `get`, seed lookups | **free** | singleton requests are not billed |
+| `report` (offline) | **free** | 0 API calls — generates HTML/RIS/ENW from existing results |
 | `cited-by`, `references`, `coupling`, `related` | ~$0.0001/call | cheap — chase freely |
 | `search`, `resolve` | **$0.001/call** | 10× the cost. Think before re-running |
 
@@ -74,13 +76,17 @@ python "<OA>" search "QUERY" [--from-year Y] [--to-year Y] [--min-citations N]
       [--type article] [--oa-only] [--has-abstract] [--exclude-retracted]
       [--journal S…|ISSN] [--author A…|ORCID] [--institution I…|ROR] [--topic T…]
       [--semantic] [--exact] [--filter "raw:filter"] [--include-xpac]
-      [--sort relevance|citations|date|date-asc] [--limit N] [--pdfs] --out DIR
+      [--sort relevance|citations|date|date-asc] [--limit N] [--pdfs]
+      [--html] [--ris] [--enw] [--citations] [--all] --out DIR
 
 # Citation chasing
-python "<OA>" cited-by   SEED [SEED2 …]   # works citing the seed; 2+ seeds = co-citation
-python "<OA>" references SEED             # the seed's own reference list
-python "<OA>" coupling   SEED SEED2       # references shared by both (bibliographic coupling)
-python "<OA>" related    SEED             # OpenAlex's algorithmic neighbours
+python "<OA>" cited-by   SEED [SEED2 …]   [--html] [--citations] [--all] --out DIR
+python "<OA>" references SEED             [--html] [--citations] [--all] --out DIR
+python "<OA>" coupling   SEED SEED2       [--html] [--citations] [--all] --out DIR
+python "<OA>" related    SEED             [--html] [--citations] [--all] --out DIR
+
+# Offline reports & EndNote/RIS export (0 API calls, reads existing search directory)
+python "<OA>" report <DIR> [--html] [--ris] [--enw] [--citations] [--all] [--title TITLE]
 
 # Utilities
 python "<OA>" resolve {authors|sources|institutions|topics|funders|publishers} "NAME"
@@ -99,23 +105,32 @@ python "<OA>" budget
   conceptually related work whose wording differs. Capped at 50 results.
 - `--exact` — unstemmed; **required** for wildcards (`radiol*`, `wom?n`).
 
-## Output
+## Output Structure
 
-Every run writes to `--out`:
+Outputs are cleanly partitioned so the working directory never becomes cluttered:
 
 | File | Use |
 | --- | --- |
 | `report.md` | Screening report: authors, venue, metrics, topic, access links, abstract |
-| `results.csv` | Excel-ready (UTF-8 BOM), 32 columns |
-| `results.jsonl` | Raw records, for re-analysis without re-querying |
-| `pdfs/` | Open-access PDFs, with `--pdfs` |
+| `report.html` | Interactive HTML dashboard with live search, filters, sorting, and collapsible abstracts (`--html` or `--all`) |
+| `references.ris` | Universal RIS library for EndNote, Zotero, Mendeley (`--ris`, `--citations`, or `--all`) |
+| `references.enw` | Native EndNote tagged format for 1-click import (`--enw`, `--citations`, or `--all`) |
+| `pdfs/` | Downloaded open-access PDFs (`--pdfs`) |
+| `raw/results.csv` | Excel-ready spreadsheet (UTF-8 BOM), 32 columns |
+| `raw/results.jsonl` | Raw OpenAlex JSON records for programmatic analysis |
 
 Default `--out` is `results/<command>`; set something descriptive per project.
 
-**Token discipline:** stdout gives you the count, cost, and top 10 — usually
+**Token discipline:** stdout gives you the count, cost, files, and top 10 — usually
 enough to report back. Don't cat `results.jsonl`. If you need detail, grep
-`report.md` or read a slice of it. To re-analyse, read `results.csv` with
+`report.md` or read a slice of it. To re-analyse, read `raw/results.csv` with
 pandas rather than re-running the query.
+
+## EndNote, Citations & HTML Reports
+
+- **When the user asks for citations or an EndNote database:** Always pass `--citations` (or `--all`) so both `references.enw` and `references.ris` are generated.
+- **When the user asks for an interactive report:** Pass `--html` (or `--all`).
+- **For existing search runs:** Do **not** re-query OpenAlex! Use `python "<OA>" report <DIR> --all` to generate `report.html`, `references.ris`, and `references.enw` offline for free.
 
 ## Workflows
 

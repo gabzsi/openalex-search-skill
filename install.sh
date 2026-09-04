@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Install the openalex-search skill into ~/.claude/skills/.
+# Universal installer for the openalex-search skill across AI assistants.
 # Safe to re-run: overwrites the skill files, never touches an existing .env.
 
 set -euo pipefail
 
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-target_dir="$HOME/.claude/skills/openalex-search"
 
-echo "Installing openalex-search"
-echo "  from: $source_dir"
-echo "  to:   $target_dir"
+echo "=========================================================="
+echo "   OpenAlex Literature Search Skill - Universal Installer"
+echo "=========================================================="
+echo "Source: $source_dir"
 
 # --- Python check -----------------------------------------------------------
 if command -v python3 >/dev/null 2>&1; then
@@ -22,54 +22,88 @@ else
     echo "Install Python 3.9 or newer and re-run."
     exit 1
 fi
-echo "  python: $("$python_bin" --version 2>&1)"
+echo "Python: $("$python_bin" --version 2>&1)"
 
-# --- Copy -------------------------------------------------------------------
-mkdir -p "$target_dir/scripts"
-for item in SKILL.md reference.md .env.example; do
-    if [ -f "$source_dir/$item" ]; then
-        cp "$source_dir/$item" "$target_dir/$item"
-        echo "  + $item"
+# --- Determine targets ------------------------------------------------------
+target_dirs=()
+
+if [ "${1:-}" = "--claude" ]; then
+    target_dirs+=("$HOME/.claude/skills/openalex-search")
+elif [ "${1:-}" = "--gemini" ]; then
+    target_dirs+=("$HOME/.gemini/config/skills/openalex-search")
+elif [ "${1:-}" = "--path" ] && [ -n "${2:-}" ]; then
+    target_dirs+=("$2")
+elif [ "${1:-}" = "--all" ]; then
+    target_dirs+=("$HOME/.claude/skills/openalex-search")
+    target_dirs+=("$HOME/.gemini/config/skills/openalex-search")
+else
+    # Auto-detection
+    if [ -d "$HOME/.claude" ]; then
+        target_dirs+=("$HOME/.claude/skills/openalex-search")
     fi
-done
-cp "$source_dir/scripts/openalex.py" "$target_dir/scripts/openalex.py"
-echo "  + scripts/openalex.py"
-
-# --- Verify -----------------------------------------------------------------
-cli="$target_dir/scripts/openalex.py"
-echo ""
-echo "Verifying..."
-if ! "$python_bin" "$cli" --help >/dev/null; then
-    echo "ERROR: the CLI did not run correctly."
-    exit 1
+    if [ -d "$HOME/.gemini" ]; then
+        target_dirs+=("$HOME/.gemini/config/skills/openalex-search")
+    fi
+    if [ ${#target_dirs[@]} -eq 0 ]; then
+        target_dirs+=("$HOME/.claude/skills/openalex-search")
+    fi
 fi
-echo "  CLI runs."
 
-# --- API key ----------------------------------------------------------------
+# --- Install to targets -----------------------------------------------------
+for target in "${target_dirs[@]}"; do
+    echo ""
+    echo "Installing to: $target"
+    mkdir -p "$target/scripts"
+    mkdir -p "$target/tests"
+
+    for item in SKILL.md reference.md README.md LICENSE .env.example; do
+        if [ -f "$source_dir/$item" ]; then
+            cp "$source_dir/$item" "$target/$item"
+            echo "  + $item"
+        fi
+    done
+
+    cp "$source_dir/scripts/openalex.py" "$target/scripts/openalex.py"
+    echo "  + scripts/openalex.py"
+
+    if [ -f "$source_dir/tests/test_exports.py" ]; then
+        cp "$source_dir/tests/test_exports.py" "$target/tests/test_exports.py"
+        echo "  + tests/test_exports.py"
+    fi
+
+    # Verify
+    cli="$target/scripts/openalex.py"
+    if ! "$python_bin" "$cli" --help >/dev/null; then
+        echo "ERROR: CLI verification failed at $cli"
+        exit 1
+    fi
+    echo "  [OK] CLI verified successfully."
+done
+
+# --- API Key check ----------------------------------------------------------
 have_key=""
 [ -n "${OPENALEX_API_KEY:-}" ] && have_key=1
 for f in "$HOME/.openalex_key" "$HOME/openalex_key.txt" \
-         "$HOME/.openalex_key.txt" "$HOME/openalex_api_key.txt" \
-         "$target_dir/.env"; do
+         "$HOME/.openalex_key.txt" "$HOME/openalex_api_key.txt"; do
     [ -f "$f" ] && have_key=1
 done
 
 echo ""
-echo "Done."
+echo "=========================================================="
+echo "Installation Complete!"
+echo "=========================================================="
 if [ -z "$have_key" ]; then
-    cat <<EOF
-
-No API key found. It is optional, but a free key raises your daily
-budget from \$0.10 to \$1.00.
-  1. Get one at https://openalex.org/settings/api
-  2. Save it, and nothing else, to: $HOME/.openalex_key
-EOF
+    echo ""
+    echo "[Note] No OpenAlex API key found."
+    echo "The tool works completely free without a key (\$0.10/day budget)."
+    echo "A free key raises your daily budget 10x (\$1.00/day):"
+    echo "  1. Get a key at https://openalex.org/settings/api"
+    echo "  2. Save it to: $HOME/.openalex_key"
 fi
-cat <<EOF
 
-Restart Claude Code so it picks up the new skill, then just ask:
-  "find recent papers on <your topic> and grab the open-access PDFs"
-
-Or run it directly:
-  $python_bin "$cli" --help
-EOF
+echo ""
+echo "Usage with AI assistants:"
+echo "  Claude Code:           Ask 'Search papers on <topic> with --html and --citations'"
+echo "  Gemini / Antigravity:  Ask 'Search papers on <topic> with --html and --citations'"
+echo "  Cursor / Roo / Cline:  Reference $cli in rules or prompt"
+echo "  Terminal CLI:          $python_bin \"${target_dirs[0]}/scripts/openalex.py\" --help"
